@@ -26,20 +26,6 @@ export function Sidebar() {
   const pathname = usePathname();
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-800 bg-slate-950/90 backdrop-blur md:flex">
-      <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-400">
-          <ShieldCheck size={18} />
-        </div>
-        <div>
-          <p className="text-sm font-bold tracking-widest text-slate-100">
-            SENTINEL-X
-          </p>
-          <p className="text-[10px] uppercase tracking-wider text-slate-500">
-            Agent Runtime Gateway
-          </p>
-        </div>
-      </div>
-
       <nav className="flex flex-1 flex-col gap-1 p-3">
         {NAV.map(({ href, label, icon: Icon }) => {
           const active =
