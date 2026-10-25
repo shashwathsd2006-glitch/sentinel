@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -90,11 +91,30 @@ export function Topbar() {
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <span className="live-dot h-2 w-2 rounded-full bg-emerald-400" />
-        <span className="text-[11px] font-medium text-slate-400">
-          Gateway online
-        </span>
+      <div className="flex items-center gap-3 md:gap-4">
+        <div className="flex items-center gap-2">
+          <span className="live-dot h-2 w-2 rounded-full bg-emerald-400" />
+          <span className="text-[11px] font-medium text-slate-400">
+            Gateway online
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 border-l border-slate-800 pl-3 md:pl-4">
+          <Image
+            src="/sentinelX_logo.png"
+            alt="SENTINEL-X logo"
+            width={40}
+            height={40}
+            className="h-9 w-9 object-contain md:h-10 md:w-10"
+            onError={(e) => {
+              // Fallback: hide only the logo if it fails to load; the
+              // header, brand label and the rest of the dashboard stay.
+              e.currentTarget.style.display = "none";
+            }}
+          />
+          <span className="hidden text-[11px] font-semibold tracking-wide text-slate-300 lg:inline">
+            SENTINEL-X
+          </span>
+        </div>
       </div>
     </header>
   );
