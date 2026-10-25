@@ -1,0 +1,36 @@
+# Dependencies / build output
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Local databases & runtime state
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Secrets / local environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs & OS noise
+*.log
+npm-debug.log*
+Thumbs.db
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
