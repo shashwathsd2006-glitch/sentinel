@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import os
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,22 @@ from .schemas import ApprovalDecisionRequest
 from .tools import list_tool_specs
 
 settings = get_settings()
+logger = logging.getLogger("sentinelx")
+
+# The API is a localhost-only, UNAUTHENTICATED demo interface (see SECURITY.md).
+# CORS therefore only allows the dashboard dev/production origins — not "*".
+DEFAULT_ORIGINS = [
+    "http://127.0.0.1:3010",
+    "http://localhost:3010",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+_env_origins = os.environ.get("SENTINEL_ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()]
+    if _env_origins
+    else DEFAULT_ORIGINS
+)
 
 app = FastAPI(
     title="SENTINEL-X API",
@@ -32,10 +50,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 
@@ -45,12 +63,25 @@ def on_startup() -> None:
 
 
 @app.exception_handler(GatewayError)
-def gateway_error_handler(request: Request, exc: GatewayError):
-    from fastapi.responses import JSONResponse
-
+def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResponse:
+    """Domain errors -> documented status code + machine-readable code."""
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": exc.code, "message": exc.message},
+    )
+
+
+@app.exception_handler(Exception)
+def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Unexpected failures return a generic 500; the traceback goes to the
+    server log only, never to the client."""
+    logger.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": "Unexpected server error. Details were written to the backend log.",
+        },
     )
 
 

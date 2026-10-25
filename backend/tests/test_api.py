@@ -143,3 +143,64 @@ def test_scenario_reruns_are_reliable(client):
     )
     incidents = client.get("/api/incidents").json()
     assert incidents["total"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Deployment safety
+# ---------------------------------------------------------------------------
+
+
+def test_cors_rejects_unknown_origins(client):
+    """Only the dashboard origins are allowed; '*' is not echoed back."""
+    res = client.options(
+        "/api/metrics",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert res.status_code in {200, 400, 403}  # preflight handled
+    assert res.headers.get("access-control-allow-origin") is None
+
+    ok = client.options(
+        "/api/metrics",
+        headers={
+            "Origin": "http://127.0.0.1:3010",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert ok.headers.get("access-control-allow-origin") == "http://127.0.0.1:3010"
+
+
+def test_unhandled_errors_return_generic_500(clean_state):
+    """Unexpected exceptions never leak a stack trace to the client."""
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("secret internal detail 12345")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        with patch("app.main.run_benchmark", boom):
+            res = client.post("/api/evaluation/run")
+
+    assert res.status_code == 500
+    body = res.json()
+    assert body["error"] == "internal_error"
+    assert "secret internal detail" not in res.text
+    assert "Traceback" not in res.text
+
+
+def test_whitespace_actor_rejected(client):
+    client.post("/api/scenarios/scenario_c/run")
+    approval = client.get("/api/approvals", params={"status": "PENDING"}).json()[
+        "items"
+    ][0]
+    res = client.post(
+        f"/api/approvals/{approval['id']}/decision",
+        json={"decision": "approve", "actor": "   "},
+    )
+    assert res.status_code == 422

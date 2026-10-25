@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -505,6 +505,30 @@ class Gateway:
         self.db.flush()
         return approval
 
+    def _claim_approval(
+        self,
+        approval_id: str,
+        values: dict[str, Any],
+        *,
+        require_unconsumed: bool = False,
+    ) -> bool:
+        """Atomically claim a pending approval (compare-and-set UPDATE).
+
+        Only one caller can flip an approval out of ``PENDING`` (and, for
+        approvals, from ``consumed=0`` to ``consumed=1``). Concurrent
+        approval/replay attempts therefore lose the race and receive a 409
+        instead of executing the protected tool twice.
+        """
+        stmt = update(Approval).where(
+            Approval.id == approval_id,
+            Approval.status == "PENDING",
+        )
+        if require_unconsumed:
+            stmt = stmt.where(Approval.consumed.is_(False))
+        result = self.db.execute(stmt.values(**values))
+        self.db.flush()
+        return bool(result.rowcount)
+
     def decide_approval(
         self,
         approval_id: str,
@@ -516,7 +540,9 @@ class Gateway:
 
         Approving triggers immediate revalidation of the exact action
         against the *current* policy and action history before execution.
-        Approvals are single-use and bound to the original parameters.
+        Approvals are single-use and bound to the original parameters; the
+        single-use claim is an atomic UPDATE so concurrent requests cannot
+        execute the same authorization twice.
         """
         approval = self.db.get(Approval, approval_id)
         if approval is None:
@@ -536,10 +562,22 @@ class Gateway:
 
         now = utcnow()
         if now > approval.expires_at:
-            approval.status = "EXPIRED"
-            approval.decided_at = now
-            approval.decision = "expired"
-            approval.decided_by = actor
+            claimed = self._claim_approval(
+                approval_id,
+                {
+                    "status": "EXPIRED",
+                    "decided_at": now,
+                    "decision": "expired",
+                    "decided_by": actor,
+                },
+            )
+            if not claimed:
+                self.db.expire(approval)
+                raise ApprovalConflict(
+                    f"approval {approval_id} already resolved with status "
+                    f"{approval.status} (replay rejected)"
+                )
+            self.db.expire(approval)
             call = self._call_from_approval(approval)
             event = self._persist_event(
                 call,
@@ -570,10 +608,22 @@ class Gateway:
         call = self._call_from_approval(approval)
 
         if not approve:
-            approval.status = "REJECTED"
-            approval.decision = "rejected"
-            approval.decided_at = now
-            approval.decided_by = actor
+            claimed = self._claim_approval(
+                approval_id,
+                {
+                    "status": "REJECTED",
+                    "decision": "rejected",
+                    "decided_at": now,
+                    "decided_by": actor,
+                },
+            )
+            if not claimed:
+                self.db.expire(approval)
+                raise ApprovalConflict(
+                    f"approval {approval_id} already resolved with status "
+                    f"{approval.status} (replay rejected)"
+                )
+            self.db.expire(approval)
             explanation = (
                 f"Human reviewer '{actor}' rejected the pending action; the "
                 "protected tool was never invoked."
@@ -610,12 +660,26 @@ class Gateway:
                 side_effect=False,
             )
 
-        # ---- APPROVE: consume first (single-use), then revalidate, then run.
-        approval.consumed = True
-        approval.decision = "approved"
-        approval.decided_at = now
-        approval.decided_by = actor
-        self.db.flush()
+        # ---- APPROVE: atomically consume first (single-use), then revalidate,
+        # ---- then run. Losing a concurrent claim yields HTTP 409, never a
+        # ---- second execution.
+        claimed = self._claim_approval(
+            approval_id,
+            {
+                "consumed": True,
+                "decision": "approved",
+                "decided_at": now,
+                "decided_by": actor,
+            },
+            require_unconsumed=True,
+        )
+        if not claimed:
+            self.db.expire(approval)
+            raise ApprovalConflict(
+                f"approval {approval_id} already resolved with status "
+                f"{approval.status} (replay rejected)"
+            )
+        self.db.expire(approval)
 
         agent = self._agent(approval.agent_id)
         ctx = self.build_context(agent, call, approval_context=True)

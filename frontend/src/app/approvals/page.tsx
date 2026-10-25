@@ -35,9 +35,13 @@ export default function ApprovalsPage() {
   const { data, error, loading, refresh } = usePolling<{
     items: ApprovalItem[];
     total: number;
-  }>(() => apiGet(`/api/approvals${query}`), { intervalMs: 3000 });
+  }>(() => apiGet(`/api/approvals${query}`), {
+    intervalMs: 3000,
+    refetchKey: tab, // switch tabs -> refetch immediately
+  });
 
   async function decide(approval: ApprovalItem, decision: "approve" | "reject") {
+    if (busyId) return; // guard against duplicate submissions
     setBusyId(approval.id);
     setMessage(null);
     setOutcome(null);
@@ -52,11 +56,18 @@ export default function ApprovalsPage() {
         },
       );
       setOutcome(res);
-      setMessage(
-        decision === "approve"
-          ? "Approved — authorization was revalidated immediately before execution."
-          : "Rejected — the protected tool was never invoked.",
-      );
+      // Report the ACTUAL execution outcome, not just the decision label.
+      if (res.result.executed) {
+        setMessage("Approved — the protected action executed exactly once.");
+      } else if (decision === "approve") {
+        setMessage(
+          res.result.error
+            ? `Approved, but execution failed: ${res.result.error}`
+            : "Approved — the gateway revalidated the action; nothing was executed.",
+        );
+      } else {
+        setMessage("Rejected — the protected tool was never invoked.");
+      }
       await refresh();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -215,14 +226,14 @@ export default function ApprovalsPage() {
                     <div className="flex flex-col gap-2">
                       <Button
                         onClick={() => void decide(a, "approve")}
-                        disabled={busyId === a.id}
+                        disabled={busyId !== null}
                       >
                         <CheckCircle2 size={13} /> Approve
                       </Button>
                       <Button
                         variant="danger"
                         onClick={() => void decide(a, "reject")}
-                        disabled={busyId === a.id}
+                        disabled={busyId !== null}
                       >
                         <XCircle size={13} /> Reject
                       </Button>

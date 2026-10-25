@@ -11,6 +11,32 @@ explanation and a persisted audit trail.
 It runs fully locally: no LLM API keys, no cloud services, no internet access at runtime,
 no real emails, no real customer data and no real external transfers.
 
+> ⚠️ **Localhost-only demo.** The API has **no authentication**; anyone who can reach the
+> port can approve actions and read audit data. It binds to `127.0.0.1` by default and must
+> not be exposed to a network. See [`SECURITY.md`](SECURITY.md) for the full threat model.
+
+```mermaid
+flowchart LR
+    subgraph Dashboard["Next.js dashboard :3010"]
+        UI[Views: Overview / Stream / Incidents / Approvals / Scenarios / Evaluation]
+    end
+    subgraph API["FastAPI :8010"]
+        R[REST routes]
+    end
+    subgraph Core["Security core"]
+        G[Gateway<br/>single chokepoint]
+        P[Policy engine<br/>deterministic + cumulative risk]
+        T[Protected tools<br/>HMAC execution tickets]
+    end
+    DB[(SQLite<br/>audit events / approvals / incidents)]
+    UI -->|REST| R --> G
+    G --> P
+    P -->|ALLOW| T
+    P -->|BLOCK / REQUIRE_APPROVAL| T
+    G --> DB
+    T --> DB
+```
+
 ---
 
 ## 1. What is implemented
@@ -25,7 +51,7 @@ no real emails, no real customer data and no real external transfers.
 | P0 | Next.js dark security-operations dashboard connected to the API | ✅ |
 | P1 | Human approval queue: single-use, expiring, fingerprint-bound, revalidated | ✅ |
 | P1 | Incident investigation with ordered timeline and pre-execution evidence | ✅ |
-| P1 | Automated tests (pytest, 30 tests) + evaluation benchmark suite | ✅ |
+| P1 | Automated tests (pytest, 37 tests) + evaluation benchmark suite (17 cases) | ✅ |
 | P2 | Real detection/prevention/latency metrics computed from recorded outcomes | ✅ |
 | P2 | OPA/Rego, LLM integration, animations | ⛔ intentionally deferred (see §7) |
 
@@ -68,16 +94,33 @@ Or both at once: `./scripts/start-all.sh`
 
 Then open **http://127.0.0.1:3010**.
 
-### Manual start (exact commands)
+### Windows PowerShell (manual, exact commands)
+
+```powershell
+# 1) Backend (terminal 1)
+cd backend
+py -3.12 -m venv .venv            # or: python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -c "from app.db import init_db; init_db()"
+$env:SENTINEL_PORT = "8010"       # optional; 8010 is the default
+.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+
+# 2) Frontend (terminal 2)
+cd frontend
+npm install
+$env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:8010"
+npm run dev -- --port 3010
+```
+
+### Git Bash / Linux
 
 ```bash
 # 1) Backend
 cd backend
 python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt   # Windows
-# .venv/bin/pip install -r requirements.txt               # macOS/Linux
-.venv/Scripts/python -c "from app.db import init_db; init_db()"   # create tables + seed agents
-.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -c "from app.db import init_db; init_db()"
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 
 # 2) Frontend (second terminal)
 cd frontend
@@ -104,8 +147,10 @@ client default and README). No unrelated process was terminated.
 # health
 curl http://127.0.0.1:8010/health
 
-# automated tests (30 tests)
+# automated tests (37 tests)
 cd backend && .venv/Scripts/python -m pytest     # or run pytest from the project root
+
+# benchmark suite (17 deterministic cases, also available via POST /api/evaluation/run)
 
 # end-to-end demo through the live API (all three scenarios + metrics + benchmark)
 .venv/Scripts/python scripts/demo.py
@@ -181,7 +226,7 @@ SENTINEL-X-OpenCode/
 │   │   ├── benchmark.py   # evaluation suite -> recorded test outcomes
 │   │   ├── schemas.py     # request validation
 │   │   └── main.py        # FastAPI routes
-│   ├── tests/             # pytest suite (30 tests)
+│   ├── tests/             # pytest suite (37 tests)
 │   ├── requirements.txt
 │   └── pytest.ini
 ├── frontend/

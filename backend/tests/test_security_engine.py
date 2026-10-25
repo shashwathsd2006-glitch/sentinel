@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import app.policy as policy
-from app.gateway import Gateway, ToolCall
+from app.gateway import Gateway, ToolCall, ToolNotFound
 from app.models import Agent, Event
 from app.tools import (
     GatewayBypassError,
@@ -280,3 +280,62 @@ def test_audit_events_persisted_with_decisions(client, db):
     assert payload["total"] >= 1
     assert len(payload["items"]) <= 5
     assert all(i["decision"] == "BLOCK" for i in payload["items"])
+
+
+# ---------------------------------------------------------------------------
+# Fail-safe execution: errors are never recorded as success
+# ---------------------------------------------------------------------------
+
+
+def test_execution_error_is_not_false_success(db):
+    """An ALLOW decision whose tool execution raises must be audited as
+    executed=False with the error surfaced, and must produce no side effect."""
+    gateway = Gateway(db)
+    result = gateway.act(
+        ToolCall(
+            agent_id="report-agent",
+            session_id="sess-exec-err",
+            tool="save_to_destination",
+            params={"artifact_id": "art-missing", "destination": "internal://x"},
+        )
+    )
+    assert result.decision == "ALLOW"          # the policy allowed it...
+    assert result.executed is False            # ...but execution failed
+    assert result.side_effect is False
+    assert result.error                        # failure is explicit, not silent
+
+    event = db.get(Event, result.event_id)
+    assert event.executed is False
+    assert "art-missing" in event.explanation or event.explanation
+
+    # No artifact was written anywhere.
+    assert WRITE_LOG == []
+
+
+def test_unknown_tool_rejected_by_gateway(db):
+    gateway = Gateway(db)
+    with pytest.raises(ToolNotFound):
+        gateway.act(
+            ToolCall(
+                agent_id="report-agent",
+                session_id="sess-unknown-tool",
+                tool="drop_all_tables",
+                params={},
+            )
+        )
+
+
+def test_empty_params_fail_safely(db):
+    """Malformed/empty input never reaches a protected tool."""
+    gateway = Gateway(db)
+    with pytest.raises(ToolNotFound):
+        gateway.act(
+            ToolCall(
+                agent_id="report-agent",
+                session_id="sess-empty",
+                tool="",
+                params={},
+            )
+        )
+    assert WRITE_LOG == []
+    assert OUTBOUND_LOG == []

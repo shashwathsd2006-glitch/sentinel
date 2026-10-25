@@ -189,5 +189,8 @@ class TestResult(Base):
     prevented: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     false_positive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    # Full case wall time (evaluation + persistence + tool execution),
+    # deliberately kept separate from policy-evaluation latency.
+    e2e_ms: Mapped[float] = mapped_column(Float, default=0.0)
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)

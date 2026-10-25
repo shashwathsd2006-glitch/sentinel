@@ -206,9 +206,14 @@ export interface EvaluationMetrics {
   prevention_rate: number | null;
   decision_latency_avg_ms: number | null;
   decision_latency_p95_ms: number | null;
+  e2e_latency_avg_ms?: number | null;
+  e2e_latency_p95_ms?: number | null;
   attacks: number;
   benign: number;
   false_positives: number;
+  by_kind?: Record<string, number>;
+  failed_cases?: string[];
+  notes?: string;
   cases?: { case: string; kind: string; passed: boolean }[];
   rows?: {
     case: string;
@@ -217,6 +222,7 @@ export interface EvaluationMetrics {
     actual: string;
     passed: boolean;
     latency_ms: number;
+    e2e_ms?: number;
     detail: string;
   }[];
 }

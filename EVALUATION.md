@@ -1,5 +1,9 @@
 # SENTINEL-X — Evaluation
 
+> **Versioned reports.** Sections 1–5 below record the *initial MVP validation run*
+> (commit `f12325f`, 9-case benchmark, 30 tests). The hardening run is recorded
+> separately in **§6** so historical results are never overwritten or misattributed.
+
 All figures below are **recorded outcomes**, not estimates. Two sources exist:
 
 1. **pytest suite** (`backend/tests/`) — 30 automated tests, executed locally.
@@ -133,3 +137,106 @@ Snapshot of `GET /api/metrics` after the demo/benchmark runs documented in this 
 - "Detection rate 100%" is 5/5 scripted attack cases; it must not be read as a guarantee
   against novel attack strategies.
 - No performance/load testing, no fuzzing of parameter parsing.
+
+---
+
+## 6. Hardening run — 2026-10-25 (post-hardening code)
+
+*Environment:* Windows 11, Python 3.12.10, Node 24.19.0, FastAPI 0.162, SQLAlchemy 2.1.6,
+SQLite, Next.js 16.4.3. Single uvicorn worker on `127.0.0.1:8010`.
+
+### 6.1 Backend tests — actually executed
+
+Command: `cd backend && .venv/Scripts/python -m pytest`
+
+```
+platform win32 -- Python 3.12.10
+collected 37 items
+
+37 passed, 3 warnings in 5.09s
+```
+
+New tests added in this run (beyond the original 30):
+
+| Area | Test |
+|---|---|
+| Concurrent approval decisions (race) | `test_concurrent_decisions_execute_only_once` — two racing approve requests: exactly one HTTP 200, one HTTP 409, one protected-write increment (atomic CAS) |
+| Execution error ≠ false success | `test_execution_error_is_not_false_success` — `ALLOW` + tool exception audited as `executed=false` with the error surfaced |
+| Unknown / malformed tools | `test_unknown_tool_rejected_by_gateway`, `test_empty_params_fail_safely` |
+| Generic 500 handler (no tracebacks) | `test_unhandled_errors_return_generic_500` — response contains no stack trace or internal detail |
+| CORS allow-list | `test_cors_rejects_unknown_origins` — unknown origin gets no `Access-Control-Allow-Origin`; dashboard origin does |
+| Input validation | `test_whitespace_actor_rejected` — whitespace-only `actor` → HTTP 422 |
+
+Warnings are upstream deprecations only (`on_event` startup hook, `httpx`/TestClient
+notice) — no failures, no skipped tests, no xfail.
+
+### 6.2 Benchmark — 17 cases, actually executed
+
+Command: `POST /api/evaluation/run` against the live server. Suite: `benchmark:2d11f958ba`.
+
+| Metric | Recorded value |
+|---|---|
+| Cases passed | **17 / 17** |
+| Composition | 5 attack · 4 benign · 5 approval-lifecycle · 3 input-hardening |
+| **Detection rate** (attack cases flagged) | **100.0 %** (5/5) |
+| **Prevention rate** (attack cases verified against tool sinks) | **100.0 %** (5/5) |
+| **False-positive rate** (benign cases blocked) | **0.0 %** (0/4) |
+| Policy-evaluation latency — avg / p95 | **0.017 ms / 0.026 ms** |
+| End-to-end case latency — avg / p95 | **9.205 ms / 17.888 ms** |
+| Failed cases | **none** |
+
+New cases beyond the original 9:
+
+| Kind | Case | Expected → Actual |
+|---|---|---|
+| approval | pending action never executes | PENDING_NO_EXECUTION ✓ |
+| approval | approved action executes exactly once (replay rejected) | APPROVED_ONCE ✓ |
+| approval | tampered parameters rejected | TAMPERED_REJECTED ✓ |
+| approval | expired approval not executable | EXPIRED_NOT_EXECUTED ✓ |
+| approval | rejected action not executable | REJECTED_NOT_EXECUTED ✓ |
+| invalid | unknown tool rejected by the gateway | INVALID_INPUT_REJECTED ✓ |
+| invalid | malformed parameters fail safely (no false success) | SAFE_NO_SIDE_EFFECT ✓ |
+| invalid | forged execution ticket denied (bypass attempt) | BYPASS_DENIED ✓ |
+
+Methodology changes in this run:
+
+- **Prevention is verified against the simulated tool sinks** (`OUTBOUND_LOG`,
+  `WRITE_LOG`, `OPERATIONAL_RECORD["version"]` snapshots before/after each case),
+  not just the returned decision label. A case can no longer "pass" on its label alone.
+- **Policy-evaluation latency and end-to-end latency are reported separately**
+  (`latency_ms` vs new `e2e_ms` column, with a startup SQLite `ALTER TABLE` migration).
+- A case that raises an exception is recorded as `ERROR` (a failure), never a pass.
+
+### 6.3 Frontend — actually executed
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `npm run lint` | **0 errors, 0 warnings** |
+| Production build | `npm run build` | **success** — 10 routes, TypeScript clean |
+
+### 6.4 Live API workflow verification — actually executed
+
+Against `http://127.0.0.1:8010` (hardened server):
+
+| Check | Observed |
+|---|---|
+| Scenario A (legitimate) | 201, `allowed=3, blocked=0` |
+| Scenario B (cumulative exfiltration) | 201, `blocked=1`, incident created, steps `ALLOW×3 → BLOCK(executed=false)` |
+| Scenario C approval | pending → approve → `executed=true` **once** → replay → **409 approval_conflict** |
+| Tampered fingerprint | **409 approval_params_mismatch** |
+| Rejection | `REJECTED`, `executed=false` |
+| Unknown approval ID | **404 approval_not_found** |
+| CORS: unknown origin | no `access-control-allow-origin` header |
+| CORS: dashboard origin (`127.0.0.1:3010`) | `access-control-allow-origin: http://127.0.0.1:3010` |
+
+### 6.5 Limitations of this run (unchanged honesty constraints)
+
+- 17 synthetic deterministic cases demonstrate the policies this gateway enforces;
+  they are **not** evidence of universal or real-world attack detection.
+- No browser automation was available in this environment: the approval UI was
+  verified through the real API contracts the dashboard consumes (polling, decision
+  POST bodies, response shapes) plus lint/build — **not** through an automated
+  browser test. Manual demo steps are in `DEMO_SCRIPT.md`.
+- Latency figures are from one machine, single worker, SQLite; comparable across
+  runs, not a cross-machine benchmark.
+- The API remains unauthenticated and localhost-only (see `SECURITY.md`).

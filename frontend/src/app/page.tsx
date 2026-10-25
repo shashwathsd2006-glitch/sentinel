@@ -31,6 +31,10 @@ import {
   formatTs,
 } from "@/components/ui";
 
+/** Safe percentage formatting: rates can be null when a benchmark has not run. */
+const pct = (rate: number | null | undefined): string =>
+  rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
+
 export default function OverviewPage() {
   const { data: metrics, error, loading, refresh } = usePolling<Metrics>(
     () => apiGet<Metrics>("/api/metrics"),
@@ -332,15 +336,15 @@ export default function OverviewPage() {
                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                   <span className="text-slate-400">Detection rate</span>
                   <span className="text-right font-semibold text-emerald-300">
-                    {(m.evaluation.detection_rate! * 100).toFixed(1)}%
+                    {pct(m.evaluation.detection_rate)}
                   </span>
                   <span className="text-slate-400">False positives</span>
                   <span className="text-right font-semibold text-slate-200">
-                    {(m.evaluation.false_positive_rate! * 100).toFixed(1)}%
+                    {pct(m.evaluation.false_positive_rate)}
                   </span>
                   <span className="text-slate-400">Prevention rate</span>
                   <span className="text-right font-semibold text-emerald-300">
-                    {(m.evaluation.prevention_rate! * 100).toFixed(1)}%
+                    {pct(m.evaluation.prevention_rate)}
                   </span>
                 </div>
               ) : (

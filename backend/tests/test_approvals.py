@@ -198,3 +198,32 @@ def test_unknown_approval_returns_404(client):
     )
     assert res.status_code == 404
     assert res.json()["error"] == "approval_not_found"
+
+
+def test_concurrent_decisions_execute_only_once(client, db):
+    """Two racing approve requests: the CAS claim admits exactly one."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    run = _start_scenario_c(client)
+    approval = _pending_approval(client, run)
+    version_before = OPERATIONAL_RECORD["version"]
+
+    def _decide() -> int:
+        res = client.post(
+            f"/api/approvals/{approval['id']}/decision",
+            json={"decision": "approve", "actor": "reviewer-race"},
+        )
+        return res.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = sorted(pool.map(lambda _: _decide(), range(2)))
+
+    # Exactly one success (200) and one conflict (409).
+    assert statuses == [200, 409]
+    # The protected write happened exactly once.
+    assert OPERATIONAL_RECORD["version"] == version_before + 1
+
+    db.expire_all()
+    stored = db.get(Approval, approval["id"])
+    assert stored.consumed is True
+    assert stored.status == "APPROVED"

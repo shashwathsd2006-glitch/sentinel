@@ -44,6 +44,7 @@ export default function ScenarioLabPage() {
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [decidingId, setDecidingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [decisionMsg, setDecisionMsg] = useState<string | null>(null);
 
@@ -68,7 +69,10 @@ export default function ScenarioLabPage() {
   }
 
   async function decide(approval: ApprovalItem, decision: "approve" | "reject") {
+    if (decidingId) return; // guard against duplicate submissions
+    setDecidingId(approval.id);
     setActionError(null);
+    setDecisionMsg(null);
     try {
       const res = await apiPost<DecisionResponse>(
         `/api/approvals/${approval.id}/decision`,
@@ -78,10 +82,19 @@ export default function ScenarioLabPage() {
           fingerprint: decision === "approve" ? approval.fingerprint : null,
         },
       );
-      setDecisionMsg(res.result.explanation);
+      // Report the actual execution outcome, not just the decision label.
+      if (res.result.executed) {
+        setDecisionMsg(`${res.result.explanation} (executed exactly once)`);
+      } else if (res.result.error) {
+        setDecisionMsg(`Decision recorded, but execution failed: ${res.result.error}`);
+      } else {
+        setDecisionMsg(res.result.explanation);
+      }
       await Promise.all([refreshActive(), refreshRuns()]);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecidingId(null);
     }
   }
 
@@ -262,10 +275,17 @@ export default function ScenarioLabPage() {
                         </pre>
                       </div>
                       <div className="flex gap-2">
-                        <Button onClick={() => void decide(a, "approve")}>
+                        <Button
+                          onClick={() => void decide(a, "approve")}
+                          disabled={decidingId !== null}
+                        >
                           <CheckCircle2 size={13} /> Approve exact action
                         </Button>
-                        <Button variant="danger" onClick={() => void decide(a, "reject")}>
+                        <Button
+                          variant="danger"
+                          onClick={() => void decide(a, "reject")}
+                          disabled={decidingId !== null}
+                        >
                           <XCircle size={13} /> Reject
                         </Button>
                       </div>

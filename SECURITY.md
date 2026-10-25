@@ -10,11 +10,33 @@
 | T4 | **Over-privileged reads** (resource sensitivity above agent clearance) | `P-RES-001`. Test: `test_resource_clearance_enforced`. |
 | T5 | **Writes to unauthorized destinations** | `P-DEST-001` per-tool destination allow-list (`save_to_destination` → internal only). |
 | T6 | **Gateway bypass**: agent/tooling calls a protected tool directly, forges or replays an execution ticket | `tools.execute_tool()` requires an HMAC-SHA256 ticket bound to agent+session+tool+params-hash; mismatch → `GatewayBypassError`. No public endpoint executes tools (`POST /api/tools/execute` → 404). Tests: `test_direct_tool_invocation_is_rejected`, `test_forged_ticket_rejected`, `test_ticket_is_parameter_bound`, `test_no_raw_execution_endpoint`. |
-| T7 | **Approval abuse**: replay a used approval, approve altered parameters, use an expired approval | `status != PENDING`/`consumed` → 409; fingerprint mismatch → 409 `approval_params_mismatch`; TTL → status `EXPIRED`, never executed. Tests: `test_approval_replay_rejected`, `test_altered_parameters_rejected`, `test_expired_approval_not_executable`. |
+| T7 | **Approval abuse**: replay a used approval, approve altered parameters, use an expired approval | `status != PENDING`/`consumed` → 409; fingerprint mismatch → 409 `approval_params_mismatch`; TTL → status `EXPIRED`, never executed. The pending→resolved transition is an **atomic compare-and-set UPDATE** (`_claim_approval`), so racing approve/reject requests admit exactly one winner. Tests: `test_approval_replay_rejected`, `test_altered_parameters_rejected`, `test_expired_approval_not_executable`, `test_concurrent_decisions_execute_only_once`. |
 | T8 | **TOCTOU**: policy/privileges change between approval and execution | Immediate re-evaluation of the action against current policy + history right before execution; on `BLOCK` the approval ends `FAILED` and nothing runs. Test: `test_revalidation_revokes_before_execution`. |
 | T9 | **Policy engine failure** (exception, missing rules) | Fail-closed: any evaluation exception → `BLOCK` with `P-FAIL-001`. Test: `test_fail_closed_on_policy_error`. |
 | T10 | **Silent/missing audit trail** | Every evaluated action writes an `Event` row (decision, explanation, policies, risk, latency, executed/side-effect) committed before returning. Tests: `test_audit_events_persisted_with_decisions`, `test_api_metrics...`. |
 | T11 | **Unprotected modification before human consent** | `modify_operational_record` requires approval (`P-TOOL-APPROVAL-001`); side effect only after an approved decision. Test: `test_approval_required_before_protected_modification`. |
+| T12 | **Execution error recorded as success** | `ALLOW` + tool exception → `executed=false`, `error` surfaced, audit event must not claim execution; no sink mutation. Tests: `test_execution_error_is_not_false_success`, benchmark "malformed parameters fail safely". |
+| T13 | **Cross-origin drive-by requests** | CORS restricted to the dashboard origins (`127.0.0.1`/`localhost` :3010/:3000, override via `SENTINEL_ALLOWED_ORIGINS`); methods `GET`/`POST` only. Unknown origins receive no `Access-Control-Allow-Origin`. Test: `test_cors_rejects_unknown_origins`. |
+| T14 | **Information leak via unhandled errors** | A generic exception handler returns `{"error":"internal_error"}` with HTTP 500; stack traces and internal details go to the server log only. Test: `test_unhandled_errors_return_generic_500`. |
+
+## 1b. Adversary capabilities (assumed)
+
+The threat model treats the following attacker as in scope:
+
+- **Rogue agent:** can attempt any tool call with arbitrary parameters in its own
+  (or a forged) session, including unknown tools and malformed parameters. Cannot
+  mint HMAC execution tickets and cannot write to the audit DB directly.
+- **Network client on localhost:** can call any HTTP endpoint (there is no API
+  authentication), including approval decisions with arbitrary `actor` strings —
+  so approval *integrity* controls (fingerprint, TTL, single-use CAS) are the
+  defence, not identity. Banned from scope: OS-level attackers with disk access,
+  and anyone who can read `SENTINEL_TICKET_SECRET`.
+- **Malicious/compromised reviewer intent:** can approve or reject any pending
+  item (no MFA/quorum); a *single* approval cannot be replayed or parameter-shifted,
+  and policy is revalidated at execution time.
+
+Out of scope: side-channel attacks, DB tampering by a local process, browser
+compromise of the dashboard origin, and DoS/rate exhaustion.
 
 ## 2. Trust boundaries
 
@@ -38,10 +60,11 @@
    operational data are local fakes. No real data, no outbound network calls.
 2. **Deterministic agents.** Scenarios are scripted for repeatable demos; an LLM agent
    would sit upstream of the gateway and is *never* consulted for authorization.
-3. **Single-process deployment.** One uvicorn worker + SQLite file; no concurrent
-   multi-writer contention. Approval single-use is enforced within the request
-   transaction (sufficient for a single worker; use `SELECT ... FOR UPDATE` on
-   PostgreSQL for multi-node deployments).
+3. **Single-process deployment.** One uvicorn worker + SQLite file. Approval
+   single-use is enforced by an **atomic compare-and-set UPDATE** (only one
+   racing request can flip `PENDING` → resolved), which is correct even with
+   concurrent requests on one worker; for multi-node deployments move to
+   PostgreSQL with row locks.
 4. **Clock trust.** Approval expiry uses the server's clock.
 5. **Operator identity.** The `actor` field on approval decisions is self-asserted;
    a production deployment must put authentication (OIDC/SSO) in front of it.
@@ -62,8 +85,11 @@
   would need an SSE endpoint (easy follow-up: events are append-only).
 - **Risk thresholds are heuristics** (approval 65, block 80) tuned for the demo
   scenarios; they are configurable by env var and every decision is explained.
-- **No adversarial red-team coverage beyond the 9 benchmark cases** (5 attack,
-  4 benign); extend `backend/app/benchmark.py::CASES` to broaden it.
+- **No adversarial red-team coverage beyond the 17 benchmark cases** (5 attack,
+  4 benign, 5 approval-lifecycle, 3 input-hardening); extend
+  `backend/app/benchmark.py::CASES` to broaden it. This synthetic dataset
+  demonstrates the enforced policies — it is not evidence of universal or
+  real-world attack detection.
 - **Approval actor is not audited cryptographically** (no signature/MFA).
 - Rate limiting, IP allow-listing, TLS and DB encryption are out of scope for the MVP.
 
@@ -76,3 +102,22 @@
 | "Approvals are single-use, expiring, bound" | Fingerprint + TTL + `consumed` checks; tests T7 above. |
 | "Fail-closed" | `test_fail_closed_on_policy_error`; `P-FAIL-001` row in the events table on such an event. |
 | "Bypass is not possible via the public API" | `test_no_raw_execution_endpoint` + ticket verification inside `tools.execute_tool`. |
+| "Concurrent decisions cannot double-execute" | Atomic CAS claim (`_claim_approval`); `test_concurrent_decisions_execute_only_once` asserts exactly one 200 + one 409 and a single protected-write increment. |
+| "Client errors never leak internals" | Generic 500 handler (`test_unhandled_errors_return_generic_500`); domain errors return documented `{error, message}` codes. |
+
+## 6. Implemented vs planned
+
+| Control | Status |
+|---|---|
+| Gateway chokepoint + HMAC execution tickets | ✅ implemented |
+| Cumulative-risk blocking (pre-execution) | ✅ implemented |
+| Approval: single-use CAS, TTL, fingerprint binding, revalidation | ✅ implemented |
+| Atomic concurrency control for approval decisions | ✅ implemented |
+| Fail-closed policy evaluation | ✅ implemented |
+| CORS allow-list, generic 500 handler, input validation | ✅ implemented |
+| Full audit trail with executed/side-effect flags | ✅ implemented |
+| API authentication (OIDC/API keys) | ⛔ planned — localhost-only until then |
+| MFA / quorum for approval decisions | ⛔ planned |
+| OPA/Rego policy backend | ⛔ planned — Python engine behind the same seam |
+| PostgreSQL + row-level locks | ⛔ planned — SQLite fallback per problem statement |
+| SSE push updates, rate limiting, TLS | ⛔ planned |

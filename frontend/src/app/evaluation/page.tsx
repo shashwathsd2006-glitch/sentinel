@@ -115,6 +115,12 @@ export default function EvaluationPage() {
               tone="accent"
             />
             <StatCard
+              label="Avg end-to-end latency"
+              value={`${(ev.e2e_latency_avg_ms ?? 0).toFixed(2)} ms`}
+              hint={`p95 ${(ev.e2e_latency_p95_ms ?? 0).toFixed(2)} ms`}
+              tone="accent"
+            />
+            <StatCard
               label="Cases passed"
               value={`${ev.passed_cases}/${ev.total_cases}`}
               hint="expected == actual"
@@ -122,12 +128,28 @@ export default function EvaluationPage() {
             />
           </div>
 
+          {ev.notes ? (
+            <p className="text-[11px] italic leading-relaxed text-slate-500">
+              {ev.notes}
+            </p>
+          ) : null}
+
           <Card>
             <CardHeader
               title="Recorded test outcomes"
               subtitle={`Suite ${ev.suite} · stored in the test_results table`}
             />
-            <Table headers={["Case", "Kind", "Expected", "Actual", "Latency", "Result"]}>
+            <Table
+              headers={[
+                "Case",
+                "Kind",
+                "Expected",
+                "Actual",
+                "Policy",
+                "End-to-end",
+                "Result",
+              ]}
+            >
               {(ev.rows || []).map((r) => (
                 <tr key={r.case} className="hover:bg-slate-800/30">
                   <td className="px-4 py-2.5 text-xs text-slate-300">{r.case}</td>
@@ -136,7 +158,11 @@ export default function EvaluationPage() {
                       className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
                         r.kind === "attack"
                           ? "border-rose-500/40 text-rose-300"
-                          : "border-emerald-500/40 text-emerald-300"
+                          : r.kind === "benign"
+                            ? "border-emerald-500/40 text-emerald-300"
+                            : r.kind === "approval"
+                              ? "border-amber-500/40 text-amber-300"
+                              : "border-slate-600/60 text-slate-300"
                       }`}
                     >
                       {r.kind}
@@ -150,6 +176,9 @@ export default function EvaluationPage() {
                   </td>
                   <td className="px-4 py-2.5 tabular-nums text-[11px] text-cyan-300">
                     {r.latency_ms.toFixed(3)} ms
+                  </td>
+                  <td className="px-4 py-2.5 tabular-nums text-[11px] text-slate-400">
+                    {(r.e2e_ms ?? 0).toFixed(2)} ms
                   </td>
                   <td className="px-4 py-2.5">
                     {r.passed ? (
@@ -198,6 +227,12 @@ export default function EvaluationPage() {
               Wall-clock time of each policy evaluation inside the gateway
               (<code className="text-slate-300">perf_counter</code>), averaged over all
               recorded cases with a p95 figure.
+            </p>
+            <p className="mt-3 font-semibold text-slate-200">End-to-end latency</p>
+            <p className="mt-1">
+              Full case wall time including evaluation, persistence and (where
+              applicable) simulated tool execution — reported separately so
+              policy cost is never hidden behind I/O.
             </p>
           </div>
         </div>

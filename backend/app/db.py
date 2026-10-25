@@ -32,15 +32,29 @@ def get_db():
 
 
 def init_db() -> None:
-    """Create tables and seed reference data.
+    """Create tables, apply lightweight migrations and seed reference data.
 
     This is the project's reliable startup initialization path (no Alembic
     migrations are required for the MVP; see ARCHITECTURE.md).
     """
+    from sqlalchemy import inspect, text
+
     from . import models  # noqa: F401  (register tables)
     from .seed import seed_reference_data
 
     Base.metadata.create_all(bind=engine)
+
+    # Forward-compatible column additions for databases created by an older
+    # revision of the code (SQLite cannot ALTER via create_all).
+    inspector = inspect(engine)
+    if "test_results" in inspector.get_table_names():
+        columns = {c["name"] for c in inspector.get_columns("test_results")}
+        if "e2e_ms" not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE test_results ADD COLUMN e2e_ms FLOAT DEFAULT 0")
+                )
+
     db = SessionLocal()
     try:
         seed_reference_data(db)

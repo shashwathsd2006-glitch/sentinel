@@ -2,10 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/** Polling helper: fetch immediately, then refresh on an interval. */
+/** Polling helper: fetch immediately, then refresh on an interval.
+ *
+ * Pass a `refetchKey` (e.g. the current filter/tab value) to force an
+ * immediate refetch whenever it changes — otherwise a filter change would
+ * only be picked up on the next interval tick. */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
-  { intervalMs = 3000, enabled = true }: { intervalMs?: number; enabled?: boolean } = {},
+  {
+    intervalMs = 3000,
+    enabled = true,
+    refetchKey,
+  }: { intervalMs?: number; enabled?: boolean; refetchKey?: string } = {},
 ): {
   data: T | null;
   error: string | null;
@@ -39,7 +47,7 @@ export function usePolling<T>(
     void refresh();
     const id = setInterval(() => void refresh(), intervalMs);
     return () => clearInterval(id);
-  }, [refresh, intervalMs, enabled]);
+  }, [refresh, intervalMs, enabled, refetchKey]);
 
   return { data, error, loading, refresh };
 }
