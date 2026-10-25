@@ -69,10 +69,12 @@ backend/.venv/Scripts/python scripts/demo.py
 
 - Open **Evaluation**: if no benchmark has run, highlight the deliberate **empty state**
   ("no fabricated numbers"), then press **Run benchmark suite**.
-- Result table (9 recorded cases: 5 attack, 4 benign) with expected vs actual and
-  per-case latency.
+- Result table (17 recorded cases: 5 attack, 4 benign, 5 approval-lifecycle,
+  3 input-hardening) with expected vs actual, per-case policy latency and
+  end-to-end latency.
 - Headline metrics: **detection rate, prevention rate, false-positive rate, average/p95
-  decision latency** — all recomputed from stored `test_results` rows.
+  decision latency** — all recomputed from stored `test_results` rows. Passing means
+  *actual matched expected*; detection and prevention are reported separately.
 
 ## 6 · Close (30 s)
 
@@ -81,7 +83,7 @@ backend/.venv/Scripts/python scripts/demo.py
 - Say what's intentionally out of scope: no OPA binary and no PostgreSQL/Docker in this
   environment → deterministic in-process policy engine with an OPA-ready seam and
   SQLite (documented in ARCHITECTURE.md / SECURITY.md).
-- Optional developer proof: `cd backend && .venv/Scripts/python -m pytest` → **30 passed**.
+- Optional developer proof: `cd backend && .venv/Scripts/python -m pytest` → **47 passed**.
 
 ---
 

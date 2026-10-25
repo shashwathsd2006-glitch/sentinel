@@ -1,23 +1,28 @@
 # SENTINEL-X — Evaluation
 
 > **Versioned reports.** Sections 1–5 below record the *initial MVP validation run*
-> (commit `f12325f`, 9-case benchmark, 30 tests). The hardening run is recorded
-> separately in **§6** so historical results are never overwritten or misattributed.
+> (commit `f12325f`: **30 tests, 9-case benchmark**) and are kept as history.
+> The hardening run (commit `f7c6561`: **37 tests, 17-case benchmark**) is **§6**.
+> The final audit run (reconciliation, CORS verification: **47 tests, 17-case
+> benchmark**) is **§7**. Historical numbers are never rewritten to look like
+> results from the latest code — each section is explicitly labelled with its run.
 
 All figures below are **recorded outcomes**, not estimates. Two sources exist:
 
-1. **pytest suite** (`backend/tests/`) — 30 automated tests, executed locally.
+1. **pytest suite** (`backend/tests/`) — currently **47** automated tests (original
+   run: 30; hardening run: 37), executed locally.
 2. **Live benchmark suite** (`backend/app/benchmark.py` → `POST /api/evaluation/run`) —
-   9 deterministic cases executed through the *real* gateway against the *live* database;
-   every case is persisted in the `test_results` table and the Evaluation page recomputes
-   its metrics from those rows. Re-running replaces the suite (no accumulation bias).
+   currently **17** deterministic cases (original suite: 9) executed through the *real*
+   gateway against the *live* database; every case is persisted in the `test_results`
+   table and the Evaluation page recomputes its metrics from those rows. Re-running
+   replaces the suite (no accumulation bias).
 
 *Environment:* Windows, Python 3.12.10, Node 24.19.0, FastAPI 0.162, SQLAlchemy 2.1.6,
 SQLite, Next.js 16.4.3. Execution date: **2026-10-25**.
 
 ---
 
-## 1. Automated test results (actually executed)
+## 1. Automated test results (actually executed) *(historical: 30-test suite at commit `f12325f`)*
 
 Command: `cd backend && .venv/Scripts/python -m pytest -v`
 
@@ -52,7 +57,7 @@ Coverage by required area:
 Warnings are upstream deprecations only (`on_event` startup hook, `httpx`/TestClient
 notice) — no failures, no skipped tests, no xfail.
 
-## 2. Live benchmark — recorded outcomes
+## 2. Live benchmark — recorded outcomes *(historical: original 9-case suite at commit `f12325f`)*
 
 Suite: `benchmark:5df81734ca` (9 cases = 5 attack + 4 benign), executed through the live
 gateway; `POST /api/evaluation/run` and persisted to `test_results`.
@@ -125,12 +130,13 @@ Snapshot of `GET /api/metrics` after the demo/benchmark runs documented in this 
 | Frontend production build | `npm run build` | **success** — 10 routes generated |
 | Backend health | `GET /health` | `status=ok, database=ok, policies_loaded=9, fail_closed=true` |
 | All routes served | `GET /, /stream, /incidents, /approvals, /scenarios, /evaluation` | **200 OK** |
-| CORS for dashboard origin | `GET /api/policies` w/ `Origin: http://127.0.0.1:3010` | `access-control-allow-origin: *` |
+| CORS for dashboard origin | `GET /api/policies` w/ `Origin: http://127.0.0.1:3010` | `access-control-allow-origin: *` — **pre-hardening wildcard; superseded by the allow-list (commit `f7c6561`), see §6.4 and §7.3** |
 | End-to-end demo | `scripts/demo.py` | A: 3×ALLOW · B: 3×ALLOW + BLOCK(P-CUM-001, executed=false) · C: pause→approve→executed, replay→409 · benchmark 9/9 |
 
 ## 5. Honest limitations of this evaluation
 
-- The benchmark is **deterministic and small (9 cases)**; it demonstrates the required
+- The benchmark is **deterministic and small (9 cases in this original run**; the
+  current suite is 17 cases — §6.2/§7.2); it demonstrates the required
   properties but is not a statistical red-team study. Extend `CASES` to broaden coverage.
 - Latency is measured for *policy evaluation only* (not DB commit or HTTP), on one
   machine, single worker — comparable across runs, not a cross-machine benchmark.
@@ -240,3 +246,141 @@ Against `http://127.0.0.1:8010` (hardened server):
 - Latency figures are from one machine, single worker, SQLite; comparable across
   runs, not a cross-machine benchmark.
 - The API remains unauthenticated and localhost-only (see `SECURITY.md`).
+
+---
+
+## 7. Final audit run — 2026-10-25 (benchmark reconciliation, CORS verification, deployment boundary)
+
+*Purpose:* resolve the benchmark-count, CORS and authentication inconsistencies.
+*Environment:* same as §6. Server started with the documented command
+(`.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8010`).
+
+### 7.1 Backend tests — actually executed
+
+Command: `cd backend && .venv/Scripts/python -m pytest`
+
+```
+platform win32 -- Python 3.12.10
+collected 47 items
+
+47 passed, 3 warnings in 6.95s
+```
+
+10 tests added in this run (37 → **47**), all in `backend/tests/test_api.py`:
+
+| Area | Test |
+|---|---|
+| CORS: approved origins on simple GET | `test_cors_grants_approved_origins_on_simple_get` (all 4 origins, no credentials) |
+| CORS: preflight method/header grant | `test_cors_preflight_allows_frontend_method_and_headers` (GET/POST, `Content-Type`) |
+| CORS: unapproved origin | `test_cors_unapproved_origin_gets_no_grant` (simple request **and** approval-decision preflight) |
+| CORS: configuration sanity | `test_cors_configuration_has_no_wildcard` (no `*`, `allow_credentials=False`, no wildcard methods) |
+| CORS: non-browser clients unaffected | `test_api_still_works_without_origin_header` |
+| Benchmark completeness/uniqueness | `test_benchmark_case_list_is_complete_and_unique` (pins 17 cases, unique names) |
+| Benchmark executes every case once | `test_benchmark_executes_every_defined_case_once` (rows == cases == executed; failures explicitly listed) |
+| Benchmark no accumulation on rerun | `test_benchmark_rerun_replaces_previous_suite` |
+| Benchmark rate denominators | `test_benchmark_accounting_denominators_and_separate_rates` (detection 2/3, prevention 1/3, FP 1/2 on synthetic rows — proves detection ≠ prevention ≠ passing) |
+| Docs match current benchmark | `test_benchmark_docs_match_actual_case_count` (README, IMPLEMENTATION_REPORT, DEMO_SCRIPT must say 17 cases, not 9) |
+
+### 7.2 Benchmark — actually executed (documented entry point)
+
+Command: `curl -s -X POST http://127.0.0.1:8010/api/evaluation/run`. Suite: `benchmark:722694180a`.
+
+| Metric | Recorded value |
+|---|---|
+| Cases defined / executed / passed / failed | **17 / 17 / 17 / 0** |
+| Composition (verified from `by_kind`) | 5 attack · 4 benign · 5 approval-lifecycle · 3 input-hardening |
+| **Detection rate** (denominator = 5 attack cases) | **1.0** (5/5) |
+| **Prevention rate** (denominator = 5 attack cases, sink-verified) | **1.0** (5/5) |
+| **False-positive rate** (denominator = 4 benign cases) | **0.0** (0/4) |
+| Policy-evaluation latency — avg / p95 | **0.020 ms / 0.038 ms** |
+| End-to-end case latency — avg / p95 | **10.624 ms / 25.995 ms** |
+
+Accounting checks (both in the runner and asserted by tests): `passed + failed == total`,
+`sum(by_kind) == total`, rows == defined cases with unique names, a crashing case is
+recorded as `ERROR`/failed, detection and prevention are computed from **separate**
+per-kind denominators, and re-running replaces the previous suite.
+
+**Reconciliation:** the current benchmark is **17 cases** — the "9 cases" figures belong
+only to the original `f12325f` run, which remains preserved and labelled in §2/§4/§5.
+`README.md`, `IMPLEMENTATION_REPORT.md` and `DEMO_SCRIPT.md` were corrected to 17 and are
+now guarded by `test_benchmark_docs_match_actual_case_count`.
+
+### 7.3 CORS — live HTTP verification (actually executed)
+
+Commands (run against the documented server command):
+
+```bash
+# approved origin (dashboard dev)
+curl -s -D - -o /dev/null -H "Origin: http://127.0.0.1:3010" http://127.0.0.1:8010/api/metrics
+# approved loopback alternative
+curl -s -D - -o /dev/null -H "Origin: http://localhost:3000" http://127.0.0.1:8010/api/metrics
+# unapproved origin
+curl -s -D - -o /dev/null -H "Origin: https://untrusted.example" http://127.0.0.1:8010/api/metrics
+# preflight for the frontend's POST (approved vs unapproved)
+curl -s -D - -o /dev/null -X OPTIONS -H "Origin: http://127.0.0.1:3010" \
+  -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type" \
+  http://127.0.0.1:8010/api/evaluation/run
+curl -s -D - -o /dev/null -X OPTIONS -H "Origin: https://untrusted.example" \
+  -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type" \
+  http://127.0.0.1:8010/api/evaluation/run
+```
+
+Observed response headers:
+
+| # | Origin | Request | Observed |
+|---|---|---|---|
+| 1 | `http://127.0.0.1:3010` (approved) | GET `/api/metrics` | `200`, `access-control-allow-origin: http://127.0.0.1:3010` |
+| 2 | `http://localhost:3000` (approved) | GET `/api/metrics` | `200`, `access-control-allow-origin: http://localhost:3000` |
+| 3 | `https://untrusted.example` (unapproved) | GET `/api/metrics` | `200`, **no `access-control-allow-origin` header** — a browser there cannot read the response |
+| 4 | `http://127.0.0.1:3010` (approved) | preflight POST | `200`, `allow-origin` echoed, `allow-methods: GET, POST`, `allow-headers: …, Content-Type`, **no `allow-credentials`** |
+| 5 | `https://untrusted.example` (unapproved) | preflight POST | **`400 Bad Request`**, no `allow-origin` grant |
+
+Configuration: allow-list of the four localhost dashboard origins
+(`SENTINEL_ALLOWED_ORIGINS` to override), methods `GET/POST`, header `Content-Type`,
+`allow_credentials=False`. **No wildcard anywhere** (`test_cors_configuration_has_no_wildcard`).
+The historical `access-control-allow-origin: *` in §4 belongs to the original run and was
+replaced in commit `f7c6561`.
+
+**Honest scope:** row 3 shows CORS is browser-enforced only — the server still answers
+direct HTTP clients with `200`. That is expected: CORS is *not* authentication; the
+localhost binding (§7.4) is what keeps the unauthenticated API off the network.
+
+### 7.4 Deployment boundary — actually executed
+
+- Command used: `cd backend && SENTINEL_PORT=8010 .venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8010`
+- Listening socket (local command): `netstat -ano | grep :8010` →
+  `TCP 127.0.0.1:8010 … LISTENING` — **loopback only, no public interface**.
+- Startup paths audited: `scripts/start-backend.sh` / `.bat` (`--host 127.0.0.1`),
+  `scripts/start-all.*` (delegate to start-backend), `app/main.py` `__main__`
+  (`SENTINEL_HOST` default `127.0.0.1`), README quick starts, `.env.example`.
+  **No `0.0.0.0` binding exists anywhere.**
+- Health: `GET /health` → `status=ok, database=ok, policies_loaded=9, fail_closed=true`.
+- Authentication: `grep` over `backend/app/` finds **no** `Authorization`/API-key/
+  bearer/OAuth handling — the HTTP API is **unauthenticated**, as documented.
+  The gateway still enforces *action policy* (what agents may do) independently of
+  *caller identity* (which does not exist). Not tested: behaviour on a real LAN/public
+  interface — no such exposure was created for this audit.
+
+### 7.5 Frontend — actually executed
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `npm run lint` | **0 errors, 0 warnings** |
+| Production build | `npm run build` | **✓ Compiled successfully**, TypeScript clean, 10/10 pages |
+| Backend URL | `frontend/src/lib/api.ts` | `NEXT_PUBLIC_API_URL \|\| "http://127.0.0.1:8010"` (unchanged) |
+
+### 7.6 Workflow re-verification — actually executed
+
+Scenario A: `201, 3 allowed, 0 blocked` · Scenario B: `201, blocked=1`, incident created,
+last step `BLOCK` with `executed=False` · Scenario C: approve → `executed=true` once,
+replay → `409 approval_conflict` · `/api/metrics` evaluation matches suite
+`benchmark:722694180a` (17/17).
+
+### 7.7 Remaining limitations of this run
+
+- No browser automation: CORS and UI behavior were verified through raw HTTP responses
+  and the API contracts the dashboard consumes — **not** through an automated browser.
+- LAN/public-network exposure was deliberately **not** tested (creating it would be the
+  unsafe configuration this audit prevents); only the local bind address was inspected.
+- 17 synthetic deterministic cases still do not establish universal real-world attack
+  detection.

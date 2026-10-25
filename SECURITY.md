@@ -115,6 +115,15 @@ compromise of the dashboard origin, and DoS/rate exhaustion.
 | Atomic concurrency control for approval decisions | ✅ implemented |
 | Fail-closed policy evaluation | ✅ implemented |
 | CORS allow-list, generic 500 handler, input validation | ✅ implemented |
+| Localhost-only default binding (`127.0.0.1` in every startup path) | ✅ implemented |
+
+> **CORS is not authentication.** The allow-list only controls which *browser origins*
+> may read responses; it does not identify or authenticate callers. A direct HTTP client
+> (e.g. `curl`) on the machine can still reach every endpoint — which is exactly why the
+> API is bound to `127.0.0.1` and documented as localhost-only. Distinguish clearly:
+> the **gateway enforces action policy** (what agents may do, with revalidation at
+> execution), while **caller identity on the HTTP API does not exist yet** (planned:
+> OIDC/API keys, see §6).
 | Full audit trail with executed/side-effect flags | ✅ implemented |
 | API authentication (OIDC/API keys) | ⛔ planned — localhost-only until then |
 | MFA / quorum for approval decisions | ⛔ planned |

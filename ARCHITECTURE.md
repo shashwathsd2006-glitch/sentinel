@@ -7,7 +7,8 @@
 │  Overview · Live Stream · Incidents · Approvals · Scenario Lab · Evaluation             │
 │                        typed fetch client (src/lib/api.ts, polling every 2–6 s)          │
 └───────────────────────────────────────┬──────────────────────────────────────────────────┘
-                                        │ HTTP/JSON  (CORS enabled, no auth keys)
+                                        │ HTTP/JSON  (CORS allow-list for the local
+                                        │            dashboard origins; NO auth)
 ┌───────────────────────────────────────▼──────────────────────────────────────────────────┐
 │ FastAPI (backend/app/main.py)                                                            │
 │   /health /api/agents /api/policies /api/events /api/approvals /api/scenarios           │

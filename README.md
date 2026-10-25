@@ -51,7 +51,7 @@ flowchart LR
 | P0 | Next.js dark security-operations dashboard connected to the API | ✅ |
 | P1 | Human approval queue: single-use, expiring, fingerprint-bound, revalidated | ✅ |
 | P1 | Incident investigation with ordered timeline and pre-execution evidence | ✅ |
-| P1 | Automated tests (pytest, 37 tests) + evaluation benchmark suite (17 cases) | ✅ |
+| P1 | Automated tests (pytest, 47 tests) + evaluation benchmark suite (17 cases) | ✅ |
 | P2 | Real detection/prevention/latency metrics computed from recorded outcomes | ✅ |
 | P2 | OPA/Rego, LLM integration, animations | ⛔ intentionally deferred (see §7) |
 
@@ -147,7 +147,7 @@ client default and README). No unrelated process was terminated.
 # health
 curl http://127.0.0.1:8010/health
 
-# automated tests (37 tests)
+# automated tests (47 tests)
 cd backend && .venv/Scripts/python -m pytest     # or run pytest from the project root
 
 # benchmark suite (17 deterministic cases, also available via POST /api/evaluation/run)
@@ -196,7 +196,19 @@ Interactive OpenAPI docs: `http://127.0.0.1:8010/docs`.
 Copy `.env.example` → `.env` and adjust (never commit real secrets). Variables:
 `SENTINEL_DB_PATH`, `SENTINEL_HOST`, `SENTINEL_PORT`, `SENTINEL_APPROVAL_THRESHOLD`,
 `SENTINEL_BLOCK_THRESHOLD`, `SENTINEL_APPROVAL_TTL_MINUTES`, `SENTINEL_TICKET_SECRET`,
-`NEXT_PUBLIC_API_URL`, `SENTINEL_WEB_PORT`.
+`SENTINEL_ALLOWED_ORIGINS`, `NEXT_PUBLIC_API_URL`, `SENTINEL_WEB_PORT`.
+
+**CORS allow-list.** By default the API only grants cross-origin access to the
+dashboard origins `http://127.0.0.1:3010`, `http://localhost:3010`,
+`http://127.0.0.1:3000`, `http://localhost:3000` (methods `GET`/`POST`, header
+`Content-Type`, credentials disabled). Override with a comma-separated list:
+
+```powershell
+$env:SENTINEL_ALLOWED_ORIGINS = "http://127.0.0.1:3010,http://localhost:3010"
+```
+
+CORS is a browser cross-origin policy — it does **not** authenticate callers and it
+does not replace the localhost-only binding.
 
 > Note: the backend reads plain process environment variables (`.env` is documentation
 > for operators; export the variables in your shell to override defaults).
@@ -226,7 +238,7 @@ SENTINEL-X-OpenCode/
 │   │   ├── benchmark.py   # evaluation suite -> recorded test outcomes
 │   │   ├── schemas.py     # request validation
 │   │   └── main.py        # FastAPI routes
-│   ├── tests/             # pytest suite (37 tests)
+│   ├── tests/             # pytest suite (47 tests)
 │   ├── requirements.txt
 │   └── pytest.ini
 ├── frontend/

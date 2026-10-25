@@ -15,9 +15,9 @@ Build date: **2026-10-25 (submission day)**
 | Persistence (SQLite + SQLAlchemy, startup init + seed) | `backend/app/db.py`, `models.py`, `seed.py` | ✅ audit rows persist across requests/restarts |
 | Three demonstration scenarios + incident creation | `backend/app/scenarios.py` | ✅ A/B/C verified live |
 | Approval lifecycle (single-use, TTL, fingerprint, revalidation) | `gateway.py` | ✅ verified live incl. 409 paths |
-| Evaluation benchmark (9 cases) + metrics endpoints | `backend/app/benchmark.py`, `main.py` | ✅ 9/9 recorded |
+| Evaluation benchmark (17 cases) + metrics endpoints | `backend/app/benchmark.py`, `main.py` | ✅ 17/17 recorded (see EVALUATION.md §6–§7) |
 | Dashboard (6 views) | `frontend/src/app/*` | ✅ builds, lints clean, all routes 200 |
-| Tests (30) | `backend/tests/` | ✅ 30 passed |
+| Tests (47) | `backend/tests/` | ✅ 47 passed |
 | Scripts (start/run/demo, Windows + Git Bash) | `scripts/` | ✅ |
 | Docs (README, ARCHITECTURE, SECURITY, DEMO_SCRIPT, EVALUATION) | root | ✅ |
 | `.env.example`, `.gitignore`, `requirements.txt`, `package.json` + lockfile | root/backend/frontend | ✅ |
@@ -37,7 +37,7 @@ Build date: **2026-10-25 (submission day)**
 - ✅ Incident investigation view (ordered timeline, risk escalation, triggered policy,
   blocked operation, attack-sequence explanation, "tool executed: NO" evidence).
 - ✅ Human approval queue with visible outcomes, plus reject/expire/replay/tamper paths.
-- ✅ Security metrics (live counters) + automated tests (30) + benchmark (9 cases).
+- ✅ Security metrics (live counters) + automated tests (47) + benchmark (17 cases).
 
 **P2**
 - ✅ Evaluation view with detection / false-positive / prevention / latency metrics from
@@ -60,9 +60,12 @@ POST same approval again                       → 409 approval_conflict (replay
 POST decision w/ wrong fingerprint             → 409 approval_params_mismatch
 POST decision after TTL                        → 409 approval_expired, status EXPIRED
 POST /api/tools/execute                        → 404 (no bypass surface)
-POST /api/evaluation/run                       → 9/9 passed, detection 1.0, prevention 1.0,
-                                                  FP 0.0, avg 0.025 ms / p95 0.033 ms
-pytest                                         → 30 passed
+POST /api/evaluation/run                       → 17/17 passed, detection 1.0, prevention 1.0,
+                                                  FP 0.0 (5 attack / 4 benign / 5 approval /
+                                                  3 input-hardening; per-kind denominators)
+CORS  Origin http://127.0.0.1:3010 (approved)  → access-control-allow-origin echoed
+CORS  Origin https://untrusted.example         → NO access-control-allow-origin grant
+pytest                                         → 47 passed
 npm run lint                                   → 0 errors 0 warnings
 npm run build                                  → success (10 routes)
 ```
@@ -82,8 +85,10 @@ scripts, `.env.example`, README and the frontend API client default.
 
 ## 5. Known issues / work items
 
-1. **API has no authentication** — intended for localhost demo only (SECURITY.md §4).
-   Put auth in front before exposing beyond 127.0.0.1.
+1. **API has no authentication** — intended for localhost demo only; every startup
+   path binds `127.0.0.1` (SECURITY.md §3–§4). CORS restricts which browser origins
+   can *read* responses but does **not** authenticate callers. Put auth in front
+   before exposing beyond 127.0.0.1.
 2. **`@app.on_event("startup")` deprecation warning** on FastAPI 0.162 — harmless now;
    migrate to a lifespan handler before upgrading further.
 3. **Polling instead of SSE** (2.5–6 s) — acceptable for the demo; an events endpoint
@@ -91,8 +96,9 @@ scripts, `.env.example`, README and the frontend API client default.
 4. **`next build` warns that `package-lock.json` in `C:\Users\admin` is outside the git
    repo** — that lockfile pre-exists on the machine (user-owned, untouched); the
    frontend's own `package-lock.json` is present and used.
-5. **Single-worker SQLite** — approval single-use is transaction-safe for one worker;
-   use PostgreSQL + row locks for multi-node deployments.
+5. **Single-worker SQLite** — approval single-use is enforced by an atomic
+   compare-and-set UPDATE, so it is safe against concurrent requests on one
+   worker; use PostgreSQL + row locks for multi-node deployments.
 6. **`Sentinel-X-VSCode` project** — never accessed or modified (it did not exist in the
    working directory at build time; nothing outside `SENTINEL-X-OpenCode/` was written).
 7. **`frontend/.git`** — `create-next-app` initialized a local git repo inside
@@ -112,7 +118,7 @@ scripts, `.env.example`, README and the frontend API client default.
 ./scripts/start-backend.sh      # or scripts\start-backend.bat   → :8010
 ./scripts/start-frontend.sh     # or scripts\start-frontend.bat  → :3010
 backend/.venv/Scripts/python scripts/demo.py   # scripted end-to-end proof
-cd backend && .venv/Scripts/python -m pytest   # 30 tests
+cd backend && .venv/Scripts/python -m pytest   # 47 tests
 ```
 
 Dashboard: **http://127.0.0.1:3010** · API docs: **http://127.0.0.1:8010/docs**

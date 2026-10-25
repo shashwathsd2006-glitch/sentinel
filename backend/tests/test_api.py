@@ -204,3 +204,209 @@ def test_whitespace_actor_rejected(client):
         json={"decision": "approve", "actor": "   "},
     )
     assert res.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# CORS regression tests (browser cross-origin policy — NOT authentication)
+# ---------------------------------------------------------------------------
+
+APPROVED_ORIGINS = [
+    "http://127.0.0.1:3010",
+    "http://localhost:3010",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+
+
+def test_cors_grants_approved_origins_on_simple_get(client):
+    for origin in APPROVED_ORIGINS:
+        res = client.get("/api/metrics", headers={"Origin": origin})
+        assert res.status_code == 200
+        assert res.headers.get("access-control-allow-origin") == origin
+        # Credentials are intentionally disabled: never pair grants with cookies.
+        assert res.headers.get("access-control-allow-credentials") is None
+
+
+def test_cors_preflight_allows_frontend_method_and_headers(client):
+    res = client.options(
+        "/api/evaluation/run",
+        headers={
+            "Origin": "http://127.0.0.1:3010",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "http://127.0.0.1:3010"
+    methods = res.headers.get("access-control-allow-methods", "")
+    assert "GET" in methods and "POST" in methods and "*" not in methods
+    headers = res.headers.get("access-control-allow-headers", "")
+    assert "Content-Type" in headers
+    assert res.headers.get("access-control-allow-credentials") is None
+
+
+def test_cors_unapproved_origin_gets_no_grant(client):
+    origin = "https://untrusted.example"
+
+    # Simple request: the server still answers (CORS is enforced by browsers,
+    # it is not server-side authentication), but NO CORS grant is returned,
+    # so a browser on that origin could not read the response.
+    res = client.get("/api/metrics", headers={"Origin": origin})
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") is None
+
+    # Preflight for the mutating approval endpoint is not granted either.
+    pre = client.options(
+        "/api/approvals/apr-test/decision",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert pre.headers.get("access-control-allow-origin") is None
+
+
+def test_cors_configuration_has_no_wildcard():
+    from app.main import ALLOWED_ORIGINS, app
+    from fastapi.middleware.cors import CORSMiddleware
+
+    assert "*" not in ALLOWED_ORIGINS
+    assert all(o.startswith("http://") for o in ALLOWED_ORIGINS)
+
+    cors_middleware = [
+        m for m in app.user_middleware if m.cls is CORSMiddleware
+    ]
+    assert cors_middleware, "CORS middleware must be installed"
+    kwargs = cors_middleware[0].kwargs
+    assert kwargs["allow_credentials"] is False
+    assert "*" not in kwargs["allow_methods"]
+
+
+def test_api_still_works_without_origin_header(client):
+    """CORS changes must not affect non-browser clients."""
+    res = client.get("/api/metrics")
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") is None
+    assert res.json()["actions_evaluated"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Benchmark accounting (denominators, failures, completeness)
+# ---------------------------------------------------------------------------
+
+
+def test_benchmark_case_list_is_complete_and_unique():
+    from collections import Counter
+
+    names = [c.name for c in CASES]
+    assert len(names) == len(set(names)), "duplicate benchmark case names"
+    # Pinned so an accidental case removal fails loudly and docs stay honest.
+    assert len(CASES) == 17
+    kinds = Counter(c.kind for c in CASES)
+    assert set(kinds) <= {"attack", "benign", "approval", "invalid"}
+    assert kinds["attack"] == 5 and kinds["benign"] == 4
+
+
+def test_benchmark_executes_every_defined_case_once(client):
+    res = client.post("/api/evaluation/run")
+    assert res.status_code == 200
+    body = res.json()
+
+    # Runner must neither skip nor duplicate: rows == cases == executed.
+    assert body["total_cases"] == len(CASES) == 17
+    assert len(body["rows"]) == len(CASES)
+    row_names = [r["case"] for r in body["rows"]]
+    assert len(row_names) == len(set(row_names))
+    assert set(row_names) == {c.name for c in CASES}
+    # passed_cases counts only actual==expected; failures are listed explicitly.
+    assert body["passed_cases"] + len(body["failed_cases"]) == body["total_cases"]
+    assert body["failed_cases"] == [
+        r["case"] for r in body["rows"] if not r["passed"]
+    ]
+    assert sum(body["by_kind"].values()) == body["total_cases"]
+
+
+def test_benchmark_rerun_replaces_previous_suite(client):
+    first = client.post("/api/evaluation/run").json()
+    second = client.post("/api/evaluation/run").json()
+    assert first["suite"] != second["suite"]
+    # No accumulation across runs.
+    assert second["total_cases"] == first["total_cases"] == 17
+
+
+def test_benchmark_accounting_denominators_and_separate_rates(db):
+    """Rates use per-kind denominators; detection != prevention != passing."""
+    from app.benchmark import compute_benchmark_metrics
+    from app.models import TestResult
+
+    def row(**kw):
+        base = dict(
+            suite="benchmark:acct",
+            latency_ms=1.0,
+            e2e_ms=2.0,
+            detail="",
+            detected=None,
+            prevented=None,
+            false_positive=None,
+        )
+        base.update(kw)
+        return TestResult(**base)
+
+    db.add_all(
+        [
+            # Attack: blocked AND no side effect -> detected + prevented.
+            row(case="a1", kind="attack", expected="BLOCK", actual="BLOCK",
+                passed=True, detected=True, prevented=True),
+            # Attack: missed entirely -> not detected, not prevented, FAILED.
+            row(case="a2", kind="attack", expected="BLOCK", actual="ALLOW",
+                passed=False, detected=False, prevented=False),
+            # Attack: label said BLOCK but a side effect still happened ->
+            # detected but NOT prevented (the two rates must not be conflated),
+            # yet "passed" because actual == expected.
+            row(case="a3", kind="attack", expected="BLOCK", actual="BLOCK",
+                passed=True, detected=True, prevented=False),
+            # Benign: blocked -> false positive, FAILED.
+            row(case="b1", kind="benign", expected="ALLOW", actual="BLOCK",
+                passed=False, false_positive=True),
+            row(case="b2", kind="benign", expected="ALLOW", actual="ALLOW",
+                passed=True, false_positive=False),
+            row(case="c1", kind="approval", expected="PENDING_NO_EXECUTION",
+                actual="PENDING_NO_EXECUTION", passed=True),
+            # Crashing case: ERROR must never count as a pass.
+            row(case="e1", kind="invalid", expected="SAFE_NO_SIDE_EFFECT",
+                actual="ERROR", passed=False),
+        ]
+    )
+    db.commit()
+
+    m = compute_benchmark_metrics(db)
+    assert m["total_cases"] == 7
+    assert m["passed_cases"] == 4
+    assert m["failed_cases"] == ["a2", "b1", "e1"]
+    assert m["attacks"] == 3 and m["benign"] == 2
+    # Denominators are per kind, not total cases.
+    assert m["detection_rate"] == 0.6667   # 2/3 attacks detected
+    assert m["prevention_rate"] == 0.3333  # 1/3 attacks with no side effect
+    assert m["false_positive_rate"] == 0.5  # 1/2 benign blocked
+    assert sum(m["by_kind"].values()) == m["total_cases"]
+
+
+def test_benchmark_docs_match_actual_case_count():
+    """README / IMPLEMENTATION_REPORT / DEMO_SCRIPT must describe the
+    *current* benchmark, not a historical one (EVALUATION.md keeps its
+    clearly-labelled history and is therefore excluded)."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    for doc in ("README.md", "IMPLEMENTATION_REPORT.md", "DEMO_SCRIPT.md"):
+        text = (root / doc).read_text(encoding="utf-8")
+        assert "9 cases" not in text, f"{doc} still claims a 9-case benchmark"
+        assert "9/9" not in text, f"{doc} still claims 9/9 results"
+        assert "9 recorded cases" not in text, f"{doc} still claims 9 recorded cases"
+        # Stale pre-hardening test counts must not survive either.
+        assert "30 passed" not in text, f"{doc} still claims the old 30-test result"
+        assert "37 tests" not in text, f"{doc} still claims the intermediate 37-test count"
+        assert "(17 cases" in text or "17 recorded cases" in text or "17 cases)" in text, (
+            f"{doc} does not state the current 17-case benchmark"
+        )
