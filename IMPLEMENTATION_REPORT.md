@@ -95,9 +95,11 @@ scripts, `.env.example`, README and the frontend API client default.
    use PostgreSQL + row locks for multi-node deployments.
 6. **`Sentinel-X-VSCode` project** — never accessed or modified (it did not exist in the
    working directory at build time; nothing outside `SENTINEL-X-OpenCode/` was written).
-7. **`frontend/.git`** — `create-next-app` initialized a *local* git repo inside
-   `frontend/` (no remote, nothing pushed). Kept as-is; delete it if you prefer a
-   single-repo layout.
+7. **`frontend/.git`** — `create-next-app` initialized a local git repo inside
+   `frontend/`. It was removed when the project was pushed as **one clean repository**
+   to `https://github.com/shashwathsd2006-glitch/sentinel` (branch `main`); its
+   auto-generated "Initial commit from Create Next App" history is intentionally not
+   preserved.
 8. **Empty `docs/` folder** created during scaffolding was removed; docs live at the
    project root as required.
 9. Risk thresholds (65/80) and TTL (15 min) are heuristics tuned for the scenarios and
